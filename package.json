@@ -35,9 +35,11 @@
     "@actions/tool-cache": "^1.7.1",
     "@octokit/core": "^3.5.1",
     "@octokit/webhooks": "^9.13.0",
-    "@octokit/webhooks-types": "^4.6.0"
+    "@octokit/webhooks-types": "^4.6.0",
+    "diff": "^5.0.0"
   },
   "devDependencies": {
+    "@types/diff": "^5.0.1",
     "@types/jest": "^27.0.1",
     "@types/node": "^16.9.1",
     "@typescript-eslint/eslint-plugin": "^4.31.0",

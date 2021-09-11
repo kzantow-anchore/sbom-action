@@ -7,6 +7,7 @@ import {
   Release,
   ReleaseEvent,
 } from "@octokit/webhooks-types";
+import { createTwoFilesPatch } from "diff";
 import * as fs from "fs";
 import * as os from "os";
 import path from "path";
@@ -207,7 +208,7 @@ function getBooleanInput(name: string, defaultValue: boolean): boolean {
  * Optionally fetches the target SBOM in order to provide some information
  * on changes
  */
-async function comparePullRequestTargetArtifact(): Promise<void> {
+async function comparePullRequestTargetArtifact(sbom: string): Promise<void> {
   const doCompare = getBooleanInput("compare_pulls", false);
   const { eventName, payload, repo } = github.context;
   if (doCompare && eventName === "pull_request") {
@@ -236,6 +237,13 @@ async function comparePullRequestTargetArtifact(): Promise<void> {
           core.info(
             `Downloaded SBOM from ref '${pr.base.ref}' to ${baseArtifact}`
           );
+
+          const baseSbom = fs.readFileSync(baseArtifact);
+          const diff = createTwoFilesPatch("a", "b", baseSbom.toString(), sbom);
+
+          if (diff.length > 0) {
+            core.warning(diff);
+          }
         }
       }
     }
@@ -263,7 +271,7 @@ export async function runSyftAction(): Promise<void> {
   core.info(`SBOM scan completed in: ${(Date.now() - start) / 1000}s`);
 
   if (output) {
-    await comparePullRequestTargetArtifact();
+    await comparePullRequestTargetArtifact(output);
 
     // We may want to develop a supply chain during the build, this is one
     // potential way to do so:
