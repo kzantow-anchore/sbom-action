@@ -5,8 +5,6 @@ on: # rebuild any PRs and main branch changes
   push:
     branches:
       - main
-      - "releases/*"
-      - basic-spdx-functionality
   release:
     types:
       - created
@@ -50,7 +48,7 @@ jobs:
       - uses: ./
         with:
           path: ./tests/fixtures/yarn-project
-          artifact_name: SBOM.txt
+          artifact-name: SBOM.txt
 
   test:
     runs-on: ubuntu-latest
@@ -87,22 +85,27 @@ jobs:
       - uses: ./
         id: dirscan
         with:
-          artifact_name: sbom.spdx
-          output_var: sbom
+          artifact-name: sbom.spdx
+          output-file: dirscan-sbom.spdx
+          format: spdx
       - run: |
           echo DIR SCAN SBOM:
-          echo "${{ steps.dirscan.outputs.sbom }}"
+          cat dirscan-sbom.spdx
 
       - uses: ./
         id: imagescan
         with:
           image: alpine:latest
-          artifact_name: sbom.spdx
-          output_file: my.sbom
+          artifact-name: sbom.spdx
+          output-file: my.sbom
       - run: |
           echo IMAGE SCAN SBOM:
           cat my.sbom
 
       - uses: ./attach
         with:
-          sbom_artifact_match: sbom.spdx
+          sbom-artifact-match: sbom.spdx
+
+      - uses: ./attach
+        with:
+          sbom-artifact-match: "^dont-match-anything$"

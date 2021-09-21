@@ -24,7 +24,7 @@ const PRIOR_ARTIFACT_ENV_VAR = "ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT";
  * Tries to get a unique artifact name or otherwise as appropriate as possible
  */
 function getArtifactName(): string {
-  const fileName = core.getInput("artifact_name");
+  const fileName = core.getInput("artifact-name");
 
   // if there is an explicit filename just return it, this could cause issues
   // where earlier sboms are overwritten by later ones
@@ -32,7 +32,11 @@ function getArtifactName(): string {
     return fileName;
   }
 
-  const { job, action } = github.context;
+  const {
+    repo: { repo },
+    job,
+    action,
+  } = github.context;
   // when run without an id, we get various auto-generated names, like:
   // __self __self_2 __anchore_sbom-action  __anchore_sbom-action_2 etc.
   // so just keep the number at the end if there is one, otherwise
@@ -42,7 +46,16 @@ function getArtifactName(): string {
     stepName = `-${stepName}`;
   }
   const format = getSbomFormat();
-  return `sbom-${job}${stepName}.${format}`;
+  let extension: string = format;
+  switch (format) {
+    case "spdx-json":
+      extension = "spdx.json";
+      break;
+    case "json":
+      extension = "syft.json";
+      break;
+  }
+  return `${repo}-${job}${stepName}.${extension}`;
 }
 
 /**
@@ -52,7 +65,6 @@ function getArtifactName(): string {
  */
 async function executeSyft({ input, format }: SyftOptions): Promise<string> {
   let stdout = "";
-  let stderr = "";
 
   const cmd = await getSyftCommand();
 
@@ -61,7 +73,7 @@ async function executeSyft({ input, format }: SyftOptions): Promise<string> {
   };
 
   // https://github.com/anchore/syft#configuration
-  let args = ["packages"];
+  let args = ["packages", "-vv"];
 
   if ("image" in input && input.image) {
     args = [...args, `docker:${input.image}`];
@@ -85,25 +97,26 @@ async function executeSyft({ input, format }: SyftOptions): Promise<string> {
     },
   });
 
-  const exitCode = await exec.exec(cmd, args, {
-    env,
-    outStream,
-    listeners: {
-      stdout(buffer) {
-        stdout += buffer.toString();
+  const exitCode = await core.group("Executing Syft...", async () =>
+    exec.exec(cmd, args, {
+      env,
+      outStream,
+      listeners: {
+        stdout(buffer) {
+          stdout += buffer.toString();
+        },
+        stderr(buffer) {
+          core.info(buffer.toString());
+        },
+        debug(message) {
+          core.debug(message);
+        },
       },
-      stderr(buffer) {
-        stderr += buffer.toString();
-      },
-      debug(message) {
-        core.debug(message);
-      },
-    },
-  });
+    })
+  );
 
   if (exitCode > 0) {
     core.debug(stdout);
-    core.error(stderr);
     throw new Error("An error occurred running Syft");
   } else {
     return stdout;
@@ -160,7 +173,7 @@ export async function getSyftCommand(): Promise<string> {
  * Returns the SBOM format as specified by the user, defaults to SPDX
  */
 export function getSbomFormat(): SyftOptions["format"] {
-  return (core.getInput("format") as SyftOptions["format"]) || "spdx";
+  return (core.getInput("format") as SyftOptions["format"]) || "spdx-json";
 }
 
 /**
@@ -169,7 +182,7 @@ export function getSbomFormat(): SyftOptions["format"] {
  */
 export async function uploadSbomArtifact(contents: string): Promise<void> {
   const { repo } = github.context;
-  const client = getClient(repo, core.getInput("github_token"));
+  const client = getClient(repo, core.getInput("github-token"));
 
   const fileName = getArtifactName();
 
@@ -177,7 +190,7 @@ export async function uploadSbomArtifact(contents: string): Promise<void> {
   const filePath = `${tempPath}/${fileName}`;
   fs.writeFileSync(filePath, contents);
 
-  const outputFile = core.getInput("output_file");
+  const outputFile = core.getInput("output-file");
   if (outputFile) {
     fs.copyFileSync(filePath, outputFile);
   }
@@ -198,10 +211,10 @@ export async function uploadSbomArtifact(contents: string): Promise<void> {
  */
 function getBooleanInput(name: string, defaultValue: boolean): boolean {
   const val = core.getInput(name);
-  if (val === "") {
+  if (val === undefined || val === "") {
     return defaultValue;
   }
-  return Boolean(val);
+  return val.toLowerCase() === "true";
 }
 
 /**
@@ -209,10 +222,10 @@ function getBooleanInput(name: string, defaultValue: boolean): boolean {
  * on changes
  */
 async function comparePullRequestTargetArtifact(sbom: string): Promise<void> {
-  const doCompare = getBooleanInput("compare_pulls", false);
+  const doCompare = getBooleanInput("compare-pulls", false);
   const { eventName, payload, repo } = github.context;
   if (doCompare && eventName === "pull_request") {
-    const client = getClient(repo, core.getInput("github_token"));
+    const client = getClient(repo, core.getInput("github-token"));
 
     const pr = (payload as PullRequestEvent).pull_request;
     const branchWorkflow = await client.findLatestWorkflowRunForBranch({
@@ -257,8 +270,7 @@ export async function runSyftAction(): Promise<void> {
 
   const start = Date.now();
 
-  const doUpload = getBooleanInput("upload_artifact", true);
-  const outputVariable = core.getInput("output_var");
+  const doUpload = getBooleanInput("upload-artifact", true);
 
   const output = await executeSyft({
     input: {
@@ -285,16 +297,6 @@ export async function runSyftAction(): Promise<void> {
 
       core.exportVariable(PRIOR_ARTIFACT_ENV_VAR, getArtifactName());
     }
-
-    if (outputVariable) {
-      // need to escape multiline strings a specific way:
-      // https://github.community/t/set-output-truncates-multiline-strings/16852/5
-      const content = output
-        .replace("%", "%25")
-        .replace("\n", "%0A")
-        .replace("\r", "%0D");
-      core.setOutput(outputVariable, content);
-    }
   } else {
     throw new Error(`No Syft output: ${JSON.stringify(output)}`);
   }
@@ -304,7 +306,7 @@ export async function runSyftAction(): Promise<void> {
  * Attaches the SBOM assets to a release if run in release mode
  */
 export async function attachReleaseAssets(): Promise<void> {
-  const doRelease = getBooleanInput("upload_release_assets", true);
+  const doRelease = getBooleanInput("upload-release-assets", true);
 
   if (!doRelease) {
     return;
@@ -313,7 +315,7 @@ export async function attachReleaseAssets(): Promise<void> {
   debugLog("Got github context:", github.context);
 
   const { eventName, ref, payload, repo } = github.context;
-  const client = getClient(repo, core.getInput("github_token"));
+  const client = getClient(repo, core.getInput("github-token"));
 
   let release: Release | undefined = undefined;
 
@@ -331,7 +333,7 @@ export async function attachReleaseAssets(): Promise<void> {
 
   if (release) {
     // ^sbom.*\\.${format}$`;
-    const sbomArtifactInput = core.getInput("sbom_artifact_match");
+    const sbomArtifactInput = core.getInput("sbom-artifact-match");
     const sbomArtifactPattern = sbomArtifactInput || `^${getArtifactName()}$`;
     const matcher = new RegExp(sbomArtifactPattern);
 
@@ -345,6 +347,11 @@ export async function attachReleaseAssets(): Promise<void> {
       }
       return matches;
     });
+
+    if (!matched.length && sbomArtifactInput) {
+      core.warning(`WARNING: no SBOMs found matching ${sbomArtifactInput}`);
+      return;
+    }
 
     core.info(dashWrap(`Attaching SBOMs to release: '${release.tag_name}'`));
     for (const artifact of matched) {
